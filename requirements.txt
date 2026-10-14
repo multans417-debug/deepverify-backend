@@ -1,0 +1,16 @@
+# Inference service (CPU). Versions are a known-compatible set for Python 3.11 but were NOT
+# installed/tested inside the authoring sandbox (no network there) - see docs/environment_audit.md.
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.4.1
+torchvision==0.19.1
+numpy==1.26.4
+opencv-python-headless==4.10.0.84
+pillow==10.4.0
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+python-multipart==0.0.9
+safetensors>=0.4.0
+transformers>=4.40.0
+timm>=1.0.0
+deepguard>=1.1.0
+

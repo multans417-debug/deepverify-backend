@@ -1,0 +1,36 @@
+# Render Blueprint. Models are NOT in git: they are fetched at start-up from the HTTPS URLs below (SHA256-verified),
+# or read from a persistent disk if you attach one. See docs/render_deployment.md.
+services:
+  - type: web
+    name: deepverify-backend
+    runtime: docker
+    plan: standard            # torch + ResNet18 needs more memory than the smallest plans; measure and adjust
+    healthCheckPath: /health
+    autoDeploy: false
+    envVars:
+      - key: CORS_ORIGINS
+        sync: false           # set to your frontend origin, e.g. https://deepverify-frontend.onrender.com
+      - key: REQUIRED_MODELS
+        value: image,video
+      - key: TRUST_PROXY_HEADERS
+        value: "true"
+      - key: RATE_LIMIT_PER_MINUTE
+        value: "20"
+      - key: MAX_CONCURRENT_INFERENCES
+        value: "1"
+      - key: IMAGE_MODEL_URL
+        sync: false
+      - key: IMAGE_MODEL_SHA256
+        sync: false
+      - key: IMAGE_METADATA_URL
+        sync: false
+      - key: IMAGE_METADATA_SHA256
+        sync: false
+      - key: VIDEO_MODEL_URL
+        sync: false
+      - key: VIDEO_MODEL_SHA256
+        sync: false
+      - key: VIDEO_METADATA_URL
+        sync: false
+      - key: VIDEO_METADATA_SHA256
+        sync: false

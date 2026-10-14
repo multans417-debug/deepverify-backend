@@ -1,0 +1,10 @@
+.git
+data
+artifacts
+tests
+docs
+scripts
+__pycache__
+*.pth
+*.zip
+.env
