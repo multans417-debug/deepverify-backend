@@ -190,3 +190,69 @@ def test_safetensors_fastapi_detect_video(tmp_path):
             bundle.video = v_orig
             bundle.preprocess = v_pre_orig
 
+
+@pytest.mark.plumbing
+def test_ensure_artifacts_safetensors_and_metadata(tmp_path, monkeypatch):
+    import hashlib
+    import io
+    import urllib.request
+    from deepverify.utils.artifacts import ensure_artifacts, sha256_file
+
+    model_content = b"test_safetensors_checkpoint_content_12345"
+    model_sha = hashlib.sha256(model_content).hexdigest()
+
+    meta_content = b'{"kind": "image", "architecture": "ms_eff_gcvit_b0"}'
+    meta_sha = hashlib.sha256(meta_content).hexdigest()
+
+    class MockResponse:
+        def __init__(self, data):
+            self._bio = io.BytesIO(data)
+
+        def read(self, chunk=None):
+            return self._bio.read(chunk if chunk is not None else -1)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+    def mock_urlopen(url, *args, **kwargs):
+        if "model.safetensors" in url:
+            return MockResponse(model_content)
+        if "image_model_metadata.json" in url:
+            return MockResponse(meta_content)
+        raise ValueError(f"Unexpected url: {url}")
+
+    monkeypatch.setattr(urllib.request, "urlopen", mock_urlopen)
+
+    # 1. Successful verified download of model.safetensors and metadata
+    art_dir = tmp_path / "art_verified"
+    monkeypatch.setenv("MODEL_SAFETENSORS_URL", "https://storage.example.com/model.safetensors")
+    monkeypatch.setenv("MODEL_SAFETENSORS_SHA256", model_sha)
+    monkeypatch.setenv("IMAGE_METADATA_URL", "https://storage.example.com/image_model_metadata.json")
+    monkeypatch.setenv("IMAGE_METADATA_SHA256", meta_sha)
+
+    notes = ensure_artifacts(art_dir)
+    assert (art_dir / "model.safetensors").exists()
+    assert (art_dir / "image_model_metadata.json").exists()
+    assert sha256_file(art_dir / "model.safetensors") == model_sha
+    assert any("model.safetensors: downloaded and verified" in n for n in notes)
+    assert any("image_model_metadata.json: downloaded and verified" in n for n in notes)
+
+    # 2. Refuses using legacy .pth env var for safetensors file
+    pth_dir = tmp_path / "pth_guarded"
+    monkeypatch.setenv("IMAGE_MODEL_URL", "https://storage.example.com/model.safetensors")
+    monkeypatch.setenv("IMAGE_MODEL_SHA256", model_sha)
+    pth_notes = ensure_artifacts(pth_dir)
+    assert not (pth_dir / "image_model.pth").exists()
+    assert any("refusing safetensors file via .pth URL" in n for n in pth_notes)
+
+    # 3. Discards file on SHA-256 mismatch
+    bad_dir = tmp_path / "bad_sha"
+    monkeypatch.setenv("MODEL_SAFETENSORS_URL", "https://storage.example.com/model.safetensors")
+    monkeypatch.setenv("MODEL_SAFETENSORS_SHA256", "f" * 64)
+    bad_notes = ensure_artifacts(bad_dir)
+    assert not (bad_dir / "model.safetensors").exists()
+    assert any("SHA256 mismatch" in n for n in bad_notes)
+

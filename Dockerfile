@@ -11,6 +11,7 @@ COPY requirements.txt .
 RUN pip install -r requirements.txt
 
 COPY src ./src
+COPY artifacts ./artifacts
 RUN useradd -m appuser && mkdir -p /app/artifacts /tmp/uploads && chown -R appuser /app /tmp/uploads
 USER appuser
 

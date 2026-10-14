@@ -15,10 +15,11 @@ ARTIFACT_FILES = {
 }
 # file name -> (URL env var, SHA256 env var)
 _ENV = {
-    "image_model.pth": ("IMAGE_MODEL_URL", "IMAGE_MODEL_SHA256"),
+    "model.safetensors": ("MODEL_SAFETENSORS_URL", "MODEL_SAFETENSORS_SHA256"),
     "image_model_metadata.json": ("IMAGE_METADATA_URL", "IMAGE_METADATA_SHA256"),
-    "video_model.pth": ("VIDEO_MODEL_URL", "VIDEO_MODEL_SHA256"),
     "video_model_metadata.json": ("VIDEO_METADATA_URL", "VIDEO_METADATA_SHA256"),
+    "image_model.pth": ("IMAGE_MODEL_URL", "IMAGE_MODEL_SHA256"),
+    "video_model.pth": ("VIDEO_MODEL_URL", "VIDEO_MODEL_SHA256"),
 }
 
 
@@ -109,8 +110,15 @@ def ensure_artifacts(artifact_dir: Path) -> list:
     notes: list = []
     for name, (url_var, sha_var) in _ENV.items():
         dest = artifact_dir / name
-        url, expected = os.getenv(url_var, "").strip(), os.getenv(sha_var, "").strip().lower()
+        url = os.getenv(url_var, "").strip()
+        expected = os.getenv(sha_var, "").strip().lower()
+        if not url and name == "model.safetensors":
+            url = os.getenv("MODEL_URL", "").strip()
+            expected = os.getenv("MODEL_SHA256", "").strip().lower()
         if dest.exists() or not url:
+            continue
+        if name.endswith(".pth") and "safetensors" in url.lower():
+            notes.append(f"{name}: refusing safetensors file via .pth URL env var; use MODEL_SAFETENSORS_URL instead")
             continue
         if not url.startswith("https://"):
             notes.append(f"{name}: refusing non-https URL")

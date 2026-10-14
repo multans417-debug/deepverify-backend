@@ -18,17 +18,13 @@ services:
         value: "20"
       - key: MAX_CONCURRENT_INFERENCES
         value: "1"
-      - key: IMAGE_MODEL_URL
+      - key: MODEL_SAFETENSORS_URL
         sync: false
-      - key: IMAGE_MODEL_SHA256
+      - key: MODEL_SAFETENSORS_SHA256
         sync: false
       - key: IMAGE_METADATA_URL
         sync: false
       - key: IMAGE_METADATA_SHA256
-        sync: false
-      - key: VIDEO_MODEL_URL
-        sync: false
-      - key: VIDEO_MODEL_SHA256
         sync: false
       - key: VIDEO_METADATA_URL
         sync: false

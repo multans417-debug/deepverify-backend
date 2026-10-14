@@ -1,6 +1,9 @@
 .git
 data
-artifacts
+artifacts/*
+!artifacts/model.safetensors
+!artifacts/image_model_metadata.json
+!artifacts/video_model_metadata.json
 tests
 docs
 scripts
