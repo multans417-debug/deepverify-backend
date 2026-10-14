@@ -218,11 +218,12 @@ def test_ensure_artifacts_safetensors_and_metadata(tmp_path, monkeypatch):
             pass
 
     def mock_urlopen(url, *args, **kwargs):
-        if "model.safetensors" in url:
+        url_str = url.full_url if hasattr(url, "full_url") else str(url)
+        if "model.safetensors" in url_str:
             return MockResponse(model_content)
-        if "image_model_metadata.json" in url:
+        if "image_model_metadata.json" in url_str:
             return MockResponse(meta_content)
-        raise ValueError(f"Unexpected url: {url}")
+        raise ValueError(f"Unexpected url: {url_str}")
 
     monkeypatch.setattr(urllib.request, "urlopen", mock_urlopen)
 
@@ -255,4 +256,144 @@ def test_ensure_artifacts_safetensors_and_metadata(tmp_path, monkeypatch):
     bad_notes = ensure_artifacts(bad_dir)
     assert not (bad_dir / "model.safetensors").exists()
     assert any("SHA256 mismatch" in n for n in bad_notes)
+
+
+@pytest.mark.plumbing
+def test_ensure_artifacts_hf_token_and_unrelated_hosts(tmp_path, monkeypatch):
+    import hashlib
+    import io
+    import urllib.request
+    from deepverify.utils.artifacts import ensure_artifacts
+
+    content = b"safetensors_test_bytes_abc"
+    sha = hashlib.sha256(content).hexdigest()
+
+    captured_requests = []
+
+    class MockResponse:
+        def __init__(self, data):
+            self._bio = io.BytesIO(data)
+            self.status = 200
+            self.headers = {"Content-Type": "application/octet-stream"}
+
+        def read(self, chunk=None):
+            return self._bio.read(chunk if chunk is not None else -1)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def geturl(self):
+            return "https://huggingface.co/org/repo/resolve/main/model.safetensors"
+
+    def mock_urlopen(req, *args, **kwargs):
+        captured_requests.append(req)
+        return MockResponse(content)
+
+    monkeypatch.setattr(urllib.request, "urlopen", mock_urlopen)
+
+    # 1. Hugging Face URL with HF_TOKEN: Token MUST be attached as Bearer
+    art_dir = tmp_path / "hf_auth"
+    monkeypatch.setenv("HF_TOKEN", "hf_test_secret_token_12345")
+    monkeypatch.setenv("MODEL_SAFETENSORS_URL", "https://huggingface.co/org/repo/resolve/main/model.safetensors")
+    monkeypatch.setenv("MODEL_SAFETENSORS_SHA256", sha)
+
+    notes = ensure_artifacts(art_dir)
+    assert (art_dir / "model.safetensors").exists()
+    assert len(captured_requests) == 1
+    req = captured_requests[0]
+    auth_header = req.unredirected_hdrs.get("Authorization") or req.headers.get("Authorization")
+    assert auth_header == "Bearer hf_test_secret_token_12345"
+
+    # 2. Non-Hugging Face host with HF_TOKEN: Token MUST NOT be attached (no leakage)
+    captured_requests.clear()
+    unrelated_dir = tmp_path / "unrelated_host"
+    monkeypatch.setenv("MODEL_SAFETENSORS_URL", "https://storage.googleapis.com/bucket/model.safetensors")
+    monkeypatch.setenv("MODEL_SAFETENSORS_SHA256", sha)
+
+    notes2 = ensure_artifacts(unrelated_dir)
+    assert (unrelated_dir / "model.safetensors").exists()
+    assert len(captured_requests) == 1
+    req2 = captured_requests[0]
+    auth2 = req2.unredirected_hdrs.get("Authorization") or req2.headers.get("Authorization")
+    assert auth2 is None, f"Expected no Authorization header for unrelated host, got {auth2}"
+
+
+@pytest.mark.plumbing
+def test_safe_redirect_handler_strips_token():
+    import urllib.request
+    from deepverify.utils.artifacts import SafeRedirectHandler
+
+    handler = SafeRedirectHandler()
+
+    # Base request to Hugging Face with Bearer token
+    req = urllib.request.Request("https://huggingface.co/org/repo/resolve/main/model.safetensors")
+    req.add_header("Authorization", "Bearer hf_token_secret")
+
+    # Redirect to CDN host (e.g. cdn-lfs.huggingface.co)
+    redir_cdn = handler.redirect_request(req, None, 302, "Found", {}, "https://cdn-lfs.huggingface.co/data/model.safetensors")
+    assert redir_cdn is not None
+    assert "Authorization" not in redir_cdn.headers
+    assert "Authorization" not in redir_cdn.unredirected_hdrs
+
+    # Redirect to AWS S3 host
+    redir_s3 = handler.redirect_request(req, None, 302, "Found", {}, "https://s3.amazonaws.com/hf-bucket/model.safetensors")
+    assert redir_s3 is not None
+    assert "Authorization" not in redir_s3.headers
+    assert "Authorization" not in redir_s3.unredirected_hdrs
+
+    # Redirect to completely unrelated domain
+    redir_unrelated = handler.redirect_request(req, None, 302, "Found", {}, "https://evil.example.com/model.safetensors")
+    assert redir_unrelated is not None
+    assert "Authorization" not in redir_unrelated.headers
+    assert "Authorization" not in redir_unrelated.unredirected_hdrs
+
+
+@pytest.mark.plumbing
+def test_ensure_artifacts_rejects_html_and_http_errors(tmp_path, monkeypatch):
+    import io
+    import urllib.error
+    import urllib.request
+    from deepverify.utils.artifacts import ensure_artifacts
+
+    # 1. HTML login response
+    class MockHtmlResponse:
+        def __init__(self):
+            self._bio = io.BytesIO(b"<!DOCTYPE html><html><body>Login to Hugging Face</body></html>")
+            self.status = 200
+            self.headers = {"Content-Type": "text/html; charset=utf-8"}
+
+        def read(self, chunk=None):
+            return self._bio.read(chunk if chunk is not None else -1)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def geturl(self):
+            return "https://huggingface.co/login"
+
+    monkeypatch.setattr(urllib.request, "urlopen", lambda req, *args, **kwargs: MockHtmlResponse())
+
+    html_dir = tmp_path / "html_test"
+    monkeypatch.setenv("MODEL_SAFETENSORS_URL", "https://huggingface.co/org/repo/resolve/main/model.safetensors")
+    monkeypatch.setenv("MODEL_SAFETENSORS_SHA256", "3ec590c32f94f4297615c4d915e07d4bec4ebd4a7e0171f1e7a1b603a7f9b255")
+
+    notes = ensure_artifacts(html_dir)
+    assert not (html_dir / "model.safetensors").exists()
+    assert any("rejected unexpected HTML" in n for n in notes)
+
+    # 2. HTTP 401 Unauthorized error
+    def mock_401(req, *args, **kwargs):
+        raise urllib.error.HTTPError(getattr(req, "full_url", str(req)), 401, "Unauthorized", {}, None)
+
+    monkeypatch.setattr(urllib.request, "urlopen", mock_401)
+    err_dir = tmp_path / "err_test"
+    notes_err = ensure_artifacts(err_dir)
+    assert not (err_dir / "model.safetensors").exists()
+    assert any("download failed (HTTPError)" in n for n in notes_err)
 

@@ -30,3 +30,5 @@ services:
         sync: false
       - key: VIDEO_METADATA_SHA256
         sync: false
+      - key: HF_TOKEN
+        sync: false

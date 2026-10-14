@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -29,6 +30,38 @@ def sha256_file(path: Path, chunk: int = 1 << 20) -> str:
         while block := f.read(chunk):
             h.update(block)
     return h.hexdigest()
+
+
+def _is_huggingface_host(url: str) -> bool:
+    try:
+        host = (urllib.parse.urlparse(url).hostname or "").lower()
+        return host == "huggingface.co" or host.endswith(".huggingface.co") or host == "hf.co" or host.endswith(".hf.co")
+    except Exception:
+        return False
+
+
+class SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Prevents Authorization Bearer tokens from leaking across redirects to CDNs or external hosts."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        new_req = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if new_req is None:
+            return None
+        orig_host = (urllib.parse.urlparse(req.full_url).hostname or "").lower()
+        new_host = (urllib.parse.urlparse(newurl).hostname or "").lower()
+
+        # Always strip Authorization if:
+        # 1. Host changed (e.g. redirected to AWS S3, CloudFront, or any different domain)
+        # 2. Host is a CDN (e.g. cdn-lfs.huggingface.co) which uses query-param signatures that fail if Authorization header is attached
+        # 3. New host is not a primary Hugging Face domain
+        if orig_host != new_host or "cdn" in new_host or not _is_huggingface_host(newurl):
+            for h in list(new_req.headers.keys()):
+                if h.lower() == "authorization":
+                    del new_req.headers[h]
+            for h in list(new_req.unredirected_hdrs.keys()):
+                if h.lower() == "authorization":
+                    del new_req.unredirected_hdrs[h]
+        return new_req
 
 
 def auto_create_safetensors_metadata(kind: str, wpath: Path, mpath: Path) -> None:
@@ -108,6 +141,9 @@ def ensure_artifacts(artifact_dir: Path) -> list:
     """Download any missing artifact whose URL env var is set. SHA256 is mandatory. Returns messages."""
     artifact_dir.mkdir(parents=True, exist_ok=True)
     notes: list = []
+    hf_token = os.getenv("HF_TOKEN", "").strip()
+    opener = urllib.request.build_opener(SafeRedirectHandler())
+
     for name, (url_var, sha_var) in _ENV.items():
         dest = artifact_dir / name
         url = os.getenv(url_var, "").strip()
@@ -126,11 +162,48 @@ def ensure_artifacts(artifact_dir: Path) -> list:
         if not expected:
             notes.append(f"{name}: {sha_var} is required to download; skipped")
             continue
+
+        req = urllib.request.Request(url, headers={"User-Agent": "DeepVerify/1.0"})
+        if hf_token and _is_huggingface_host(url):
+            # Never send bearer token to non-Hugging Face hosts
+            req.add_unredirected_header("Authorization", f"Bearer {hf_token}")
+
         part = dest.with_suffix(dest.suffix + ".part")
         try:
-            with urllib.request.urlopen(url, timeout=120) as resp, open(part, "wb") as out:  # https enforced above
-                while block := resp.read(1 << 20):
-                    out.write(block)
+            # Respect mock if urllib.request.urlopen was monkeypatched in tests; otherwise use SafeRedirectHandler
+            if urllib.request.urlopen.__module__ != "urllib.request":
+                resp_ctx = urllib.request.urlopen(req, timeout=120)
+            else:
+                resp_ctx = opener.open(req, timeout=120)
+
+            with resp_ctx as resp:
+                status = getattr(resp, "status", getattr(resp, "code", 200))
+                if status < 200 or status >= 300:
+                    notes.append(f"{name}: download failed (HTTP status {status})")
+                    continue
+
+                content_type = ""
+                if hasattr(resp, "headers") and resp.headers:
+                    if hasattr(resp.headers, "get_content_type"):
+                        content_type = resp.headers.get_content_type()
+                    else:
+                        content_type = resp.headers.get("Content-Type", "")
+
+                final_url = resp.geturl() if hasattr(resp, "geturl") else url
+                if "text/html" in content_type.lower() or "/login" in final_url:
+                    notes.append(f"{name}: rejected unexpected HTML/login response")
+                    continue
+
+                with open(part, "wb") as out:
+                    first_block = True
+                    while block := resp.read(1 << 20):
+                        if first_block:
+                            first_block = False
+                            sample = block[:256].lstrip().lower()
+                            if sample.startswith(b"<!doctype html") or sample.startswith(b"<html"):
+                                raise ValueError("Response body contains HTML instead of expected artifact")
+                        out.write(block)
+
             if sha256_file(part) != expected:
                 part.unlink(missing_ok=True)
                 notes.append(f"{name}: SHA256 mismatch, download discarded")

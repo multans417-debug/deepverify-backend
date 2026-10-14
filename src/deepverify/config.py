@@ -45,6 +45,7 @@ class Settings:
     torch_threads: int
     allow_smoke_models: bool
     tmp_dir: Path | None = None
+    hf_token: str | None = None
     app_name: str = "DeepVerify"
     api_version: str = "1.0.0"
 
@@ -67,4 +68,5 @@ class Settings:
             torch_threads=_int("TORCH_THREADS", 0),
             allow_smoke_models=_bool("ALLOW_SMOKE_MODELS", False),
             tmp_dir=Path(tmp) if tmp else None,
+            hf_token=os.getenv("HF_TOKEN"),
         )
