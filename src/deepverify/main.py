@@ -45,7 +45,7 @@ def create_app(settings: Settings | None = None, registry: ModelRegistry | None 
     app.add_middleware(BodySizeLimitMiddleware, limits={"/api/v1/detect/image": settings.max_image_bytes,
                                                         "/api/v1/detect/video": settings.max_video_bytes})
     app.add_middleware(CORSMiddleware, allow_origins=list(settings.cors_origins), allow_methods=["GET", "POST", "OPTIONS"],
-                       allow_headers=["Content-Type"], allow_credentials=False, max_age=600)
+                       allow_headers=["*"], allow_credentials=False, max_age=600)
 
     @app.exception_handler(DeepVerifyError)
     async def _domain(_: Request, exc: DeepVerifyError):

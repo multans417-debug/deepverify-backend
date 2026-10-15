@@ -9,7 +9,7 @@ services:
     autoDeploy: false
     envVars:
       - key: CORS_ORIGINS
-        sync: false           # set to your frontend origin, e.g. https://deepverify-frontend.onrender.com
+        value: "https://deepverify-frontend-zu2d.onrender.com,http://localhost:5173,http://localhost:3000,http://127.0.0.1:3000"
       - key: REQUIRED_MODELS
         value: image,video
       - key: TRUST_PROXY_HEADERS

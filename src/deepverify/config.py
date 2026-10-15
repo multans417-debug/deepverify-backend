@@ -25,7 +25,7 @@ def _bool(name: str, default: bool) -> bool:
 
 def _list(name: str, default: str) -> tuple[str, ...]:
     raw = os.getenv(name, default)
-    return tuple(p.strip() for p in raw.split(",") if p.strip())
+    return tuple(p.strip().rstrip("/") for p in raw.split(",") if p.strip())
 
 
 @dataclass(frozen=True)
@@ -55,7 +55,10 @@ class Settings:
         tmp = os.getenv("UPLOAD_TMP_DIR")
         return cls(
             artifact_dir=Path(os.getenv("ARTIFACT_DIR", "artifacts")),
-            cors_origins=_list("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173"),
+            cors_origins=_list(
+                "CORS_ORIGINS",
+                "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,https://deepverify-frontend-zu2d.onrender.com",
+            ),
             required_models=_list("REQUIRED_MODELS", "image,video"),
             max_image_bytes=_int("MAX_IMAGE_BYTES", 10 * 1024 * 1024),
             max_video_bytes=_int("MAX_VIDEO_BYTES", 100 * 1024 * 1024),

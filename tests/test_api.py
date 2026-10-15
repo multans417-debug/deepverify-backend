@@ -103,6 +103,56 @@ def test_cors_allows_only_configured_origin(tmp_path):
     assert "access-control-allow-origin" not in no.headers
 
 
+def test_cors_deployed_frontend_and_preflights(tmp_path):
+    frontend_origin = "https://deepverify-frontend-zu2d.onrender.com"
+    s = make_settings(tmp_path, cors_origins=(frontend_origin, "http://localhost:5173"))
+    with TestClient(create_app(s, load_models=False)) as c:
+        for path, method in [
+            ("/ready", "GET"),
+            ("/health", "GET"),
+            ("/api/v1/models", "GET"),
+            ("/api/v1/detect/image", "POST"),
+            ("/api/v1/detect/video", "POST"),
+        ]:
+            res = c.options(
+                path,
+                headers={
+                    "Origin": frontend_origin,
+                    "Access-Control-Request-Method": method,
+                    "Access-Control-Request-Headers": "Content-Type, Accept, X-Requested-With",
+                },
+            )
+            assert res.status_code == 200, f"Preflight failed for {path} with status {res.status_code}"
+            assert res.headers.get("access-control-allow-origin") == frontend_origin
+            assert "GET" in res.headers.get("access-control-allow-methods", "")
+            assert "POST" in res.headers.get("access-control-allow-methods", "")
+
+        ready_res = c.get("/ready", headers={"Origin": frontend_origin})
+        assert ready_res.status_code == 503
+        assert ready_res.headers.get("access-control-allow-origin") == frontend_origin
+
+        health_res = c.get("/health", headers={"Origin": frontend_origin})
+        assert health_res.status_code == 200
+        assert health_res.headers.get("access-control-allow-origin") == frontend_origin
+
+        err_res = c.post("/api/v1/detect/image", headers={"Origin": frontend_origin})
+        assert err_res.status_code == 422
+        assert err_res.headers.get("access-control-allow-origin") == frontend_origin
+
+        unallowed = c.get("/ready", headers={"Origin": "https://untrusted-site.com"})
+        assert "access-control-allow-origin" not in unallowed.headers
+
+
+def test_cors_default_origins_and_trailing_slash_normalization(monkeypatch):
+    monkeypatch.delenv("CORS_ORIGINS", raising=False)
+    s = Settings.from_env()
+    assert "https://deepverify-frontend-zu2d.onrender.com" in s.cors_origins
+
+    monkeypatch.setenv("CORS_ORIGINS", "https://deepverify-frontend-zu2d.onrender.com/, http://localhost:5173/")
+    s2 = Settings.from_env()
+    assert s2.cors_origins == ("https://deepverify-frontend-zu2d.onrender.com", "http://localhost:5173")
+
+
 def test_settings_from_env(monkeypatch):
     monkeypatch.setenv("CORS_ORIGINS", "https://a.example, https://b.example")
     monkeypatch.setenv("MAX_VIDEO_BYTES", "12345")
