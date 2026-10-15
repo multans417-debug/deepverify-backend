@@ -44,6 +44,7 @@ class Settings:
     trust_proxy_headers: bool
     torch_threads: int
     allow_smoke_models: bool
+    torch_interop_threads: int = 1
     tmp_dir: Path | None = None
     hf_token: str | None = None
     app_name: str = "DeepVerify"
@@ -65,8 +66,9 @@ class Settings:
             queue_timeout_seconds=_int("QUEUE_TIMEOUT_SECONDS", 20),
             rate_limit_per_minute=_int("RATE_LIMIT_PER_MINUTE", 20),
             trust_proxy_headers=_bool("TRUST_PROXY_HEADERS", False),
-            torch_threads=_int("TORCH_THREADS", 0),
+            torch_threads=_int("TORCH_THREADS", 1),
             allow_smoke_models=_bool("ALLOW_SMOKE_MODELS", False),
+            torch_interop_threads=_int("TORCH_INTEROP_THREADS", 1),
             tmp_dir=Path(tmp) if tmp else None,
             hf_token=os.getenv("HF_TOKEN"),
         )

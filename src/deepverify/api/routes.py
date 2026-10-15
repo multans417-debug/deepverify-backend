@@ -39,6 +39,11 @@ async def _run_exclusive(state, fn, *args):
     try:
         return await run_in_threadpool(fn, *args)
     finally:
+        try:
+            import gc
+            gc.collect()
+        except Exception:
+            pass
         state.semaphore.release()
 
 

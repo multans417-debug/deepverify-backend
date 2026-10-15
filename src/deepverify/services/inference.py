@@ -60,16 +60,20 @@ def _aggregate_frame_scores(probs: np.ndarray, agg_mode: str = "conf") -> float:
     return float(np.mean(probs))
 
 
-def detect_video(path: Path, bundle, settings: Settings) -> dict:
+def detect_video(path: Path, bundle, settings: Settings, chunk_size: int = 4) -> dict:
     started = time.perf_counter()
     cfg = dataclasses.replace(bundle.video, max_seconds=float(settings.max_video_seconds),
                               timeout_seconds=float(settings.extract_timeout_seconds))
     crops, stats = extract_face_crops(path, cfg)
     arch = bundle.metadata.get("architecture", "")
     if arch in ("ms_eff_gcvit_b0", "ms_eff_gcvit"):
-        x = torch.from_numpy(np.stack([preprocess_rgb(c, bundle.preprocess) for c in crops]))
+        chunk_logits = []
         with torch.inference_mode():
-            frame_logits = bundle.model(x)
+            for i in range(0, len(crops), chunk_size):
+                chunk = crops[i : i + chunk_size]
+                x_chunk = torch.from_numpy(np.stack([preprocess_rgb(c, bundle.preprocess) for c in chunk]))
+                chunk_logits.append(bundle.model(x_chunk))
+            frame_logits = torch.cat(chunk_logits, dim=0)
             probs = torch.sigmoid(frame_logits / bundle.temperature).cpu().numpy()
         p_agg = _aggregate_frame_scores(probs, agg_mode="conf")
         p_clamped = max(1e-6, min(1.0 - 1e-6, p_agg))

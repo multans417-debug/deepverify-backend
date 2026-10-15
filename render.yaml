@@ -18,6 +18,8 @@ services:
         value: "20"
       - key: MAX_CONCURRENT_INFERENCES
         value: "1"
+      - key: TORCH_THREADS
+        value: "1"
       - key: MODEL_SAFETENSORS_URL
         sync: false
       - key: MODEL_SAFETENSORS_SHA256

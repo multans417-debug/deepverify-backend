@@ -23,10 +23,16 @@ class ModelRegistry:
         from deepverify.models.loader import load_bundle
         if self.settings.torch_threads > 0:
             torch.set_num_threads(self.settings.torch_threads)
+        if hasattr(torch, "set_num_interop_threads") and getattr(self.settings, "torch_interop_threads", 0) > 0:
+            try:
+                torch.set_num_interop_threads(self.settings.torch_interop_threads)
+            except RuntimeError:
+                pass  # already initialized
         ensure_artifacts(self.settings.artifact_dir)
+        model_cache: dict[tuple[str, str], torch.nn.Module] = {}
         for kind in KINDS:
             try:
-                self.bundles[kind] = load_bundle(kind, self.settings.artifact_dir, self.settings.allow_smoke_models)
+                self.bundles[kind] = load_bundle(kind, self.settings.artifact_dir, self.settings.allow_smoke_models, model_cache=model_cache)
                 self.errors.pop(kind, None)
                 log.info("Loaded %s model %s", kind, self.bundles[kind].version)
             except Exception as exc:   # report per model; the service stays up and answers 503 for that model

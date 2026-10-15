@@ -1,7 +1,9 @@
 """Load a trained model + its metadata for inference. Weights are state_dicts loaded with weights_only=True."""
 from __future__ import annotations
 
+import gc
 import json
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -11,6 +13,8 @@ from deepverify.models import gcvit_model, image_model, video_model
 from deepverify.preprocessing.image import PreprocessConfig
 from deepverify.preprocessing.video import VideoConfig
 from deepverify.utils.artifacts import ARTIFACT_FILES, resolve_artifact_paths, sha256_file
+
+log = logging.getLogger("deepverify.loader")
 
 
 @dataclass
@@ -38,7 +42,12 @@ def build_from_metadata(meta: dict) -> torch.nn.Module:
     raise ValueError(f"Unknown architecture {arch!r}")
 
 
-def load_bundle(kind: str, artifact_dir: Path, allow_smoke: bool = False) -> ModelBundle:
+def load_bundle(
+    kind: str,
+    artifact_dir: Path,
+    allow_smoke: bool = False,
+    model_cache: dict[tuple[str, str], torch.nn.Module] | None = None,
+) -> ModelBundle:
     wpath, mpath = resolve_artifact_paths(kind, artifact_dir)
     if not wpath.exists() or not mpath.exists():
         weights_name, meta_name = ARTIFACT_FILES[kind]
@@ -48,20 +57,33 @@ def load_bundle(kind: str, artifact_dir: Path, allow_smoke: bool = False) -> Mod
         raise ValueError(f"{mpath.name} describes a {meta.get('kind')!r} model, expected {kind!r}.")
     if meta.get("smoke_test") and not allow_smoke:
         raise ValueError(f"The {kind} model was produced by a smoke-test run and is refused (set ALLOW_SMOKE_MODELS=true to override in tests only).")
-    if sha256_file(wpath) != meta.get("weights_sha256"):
+    sha = sha256_file(wpath)
+    if sha != meta.get("weights_sha256"):
         raise ValueError(f"{wpath.name} does not match the SHA256 recorded in {mpath.name}; refusing to load.")
-    model = build_from_metadata(meta)
-    if wpath.suffix == ".safetensors":
-        from safetensors.torch import load_file
-        raw_sd = load_file(str(wpath))
-        clean_sd = {k.removeprefix("model."): v for k, v in raw_sd.items() if k.startswith("model.") or not k.startswith("model.")}
-        if hasattr(model, "net"):
-            model.net.load_state_dict(clean_sd)
-        else:
-            model.load_state_dict(clean_sd)
+
+    arch = meta.get("architecture", "")
+    cache_key = (arch, sha)
+    if model_cache is not None and cache_key in model_cache:
+        model = model_cache[cache_key]
+        log.info("Reusing in-memory %s model for %s (sha256=%s...)", arch, kind, sha[:8])
     else:
-        model.load_state_dict(torch.load(wpath, map_location="cpu", weights_only=True))
-    model.eval()
+        model = build_from_metadata(meta)
+        if wpath.suffix == ".safetensors":
+            from safetensors.torch import load_file
+            raw_sd = load_file(str(wpath))
+            clean_sd = {k.removeprefix("model."): v for k, v in raw_sd.items() if k.startswith("model.") or not k.startswith("model.")}
+            if hasattr(model, "net"):
+                model.net.load_state_dict(clean_sd)
+            else:
+                model.load_state_dict(clean_sd)
+            del raw_sd, clean_sd
+        else:
+            model.load_state_dict(torch.load(wpath, map_location="cpu", weights_only=True))
+        model.eval()
+        model.requires_grad_(False)
+        if model_cache is not None:
+            model_cache[cache_key] = model
+        gc.collect()
     cal = meta.get("calibration", {})
     return ModelBundle(
         kind=kind, model=model, metadata=meta, preprocess=PreprocessConfig.from_dict(meta["preprocess"]),
